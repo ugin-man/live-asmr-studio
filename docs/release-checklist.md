@@ -9,7 +9,7 @@
 - [x] Create the public GitHub repository
 - [x] Confirm the README images and installation instructions render on GitHub
 - [x] Enable GitHub private vulnerability reporting
-- [ ] Confirm the default branch is `main` and CI passes
+- [x] Confirm the default branch is `main` and CI passes
 
 ## GitHub release
 
