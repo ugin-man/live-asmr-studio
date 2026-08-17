@@ -6,17 +6,17 @@
 - [x] MIT license and third-party notices are present
 - [x] Public README, privacy policy, support guide, contributing guide, and security policy are present
 - [x] CI runs the local regression checks and package build
-- [ ] Create the public GitHub repository
-- [ ] Confirm the README images and installation instructions render on GitHub
-- [ ] Enable GitHub private vulnerability reporting
+- [x] Create the public GitHub repository
+- [x] Confirm the README images and installation instructions render on GitHub
+- [x] Enable GitHub private vulnerability reporting
 - [ ] Confirm the default branch is `main` and CI passes
 
 ## GitHub release
 
-- [ ] Create tag and release `v0.15.0`
-- [ ] Attach `packages/live-asmr-studio-v0.15.0.zip`
-- [ ] Explain ZIP extraction, unpacked installation, and the reload-based update flow
-- [ ] Verify the release download from a signed-out browser session
+- [x] Create tag and release `v0.15.0`
+- [x] Attach `packages/live-asmr-studio-v0.15.0.zip`
+- [x] Explain ZIP extraction, unpacked installation, and the reload-based update flow
+- [x] Verify the release download without GitHub authentication
 
 Chrome Web Store publication is not planned for this release. `docs/store-listing.md` and the listing artwork remain available if that decision changes later.
 

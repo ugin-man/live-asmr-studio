@@ -4,6 +4,8 @@ Spatial ASMR audio for ChatGPT Voice Live, processed locally in a Chromium brows
 
 Live ASMR Studio turns the audio from the tab you choose into a binaural listening session. It combines measured near-field HRTF positioning, smooth motion, voice texture controls, low-band pressure, room ambience, and reusable session prompts. The extension is free and open source.
 
+**[Download Live ASMR Studio v0.15.0](https://github.com/ugin-man/live-asmr-studio/releases/latest/download/live-asmr-studio-v0.15.0.zip)**
+
 ## Features
 
 - Measured Aalto University near-field HRTF data bundled with the extension
@@ -33,7 +35,7 @@ Headphones can become dangerously loud at high gain. Start with the device volum
 
 ## Install a release
 
-1. Download the ZIP from the latest GitHub release.
+1. Download [live-asmr-studio-v0.15.0.zip](https://github.com/ugin-man/live-asmr-studio/releases/latest/download/live-asmr-studio-v0.15.0.zip) from the latest GitHub release.
 2. Extract the ZIP to a permanent folder. Keep this folder for future updates.
 3. Open `chrome://extensions` or `brave://extensions`.
 4. Enable Developer mode.
@@ -93,6 +95,6 @@ Live ASMR Studio is an independent project. It is not affiliated with, endorsed 
 
 Live ASMR Studioは、選択したChatGPT Voice Liveタブの音声を、ブラウザ内だけでバイノーラルASMRへ加工する無料のオープンソース拡張機能です。実測近距離HRTF、円形の位置操作、自然な音の移動、声の質感、低域圧、環境音、セッション用プロンプトをまとめて使えます。
 
-導入は、GitHubのReleasesからZIPをダウンロードして展開し、`chrome://extensions` または `brave://extensions` でデベロッパーモードを有効にして、その展開先を「パッケージ化されていない拡張機能」として読み込んでください。更新時は同じフォルダの中身を新しい版へ置き換え、拡張機能カードの「再読み込み」を押すだけです。使うときはChatGPT Voice Liveのタブを前面にして、ツールバーの拡張機能アイコンを押します。
+導入は、[最新版のZIP](https://github.com/ugin-man/live-asmr-studio/releases/latest/download/live-asmr-studio-v0.15.0.zip)をダウンロードして展開し、`chrome://extensions` または `brave://extensions` でデベロッパーモードを有効にして、その展開先を「パッケージ化されていない拡張機能」として読み込んでください。更新時は同じフォルダの中身を新しい版へ置き換え、拡張機能カードの「再読み込み」を押すだけです。使うときはChatGPT Voice Liveのタブを前面にして、ツールバーの拡張機能アイコンを押します。
 
 音声は録音、保存、外部送信しません。詳しくは[プライバシーポリシー](docs/privacy.md#日本語)を確認してください。
