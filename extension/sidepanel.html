@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Live ASMR Studio</title>
+    <link rel="stylesheet" href="sidepanel.css?v=0.15.0" />
+  </head>
+  <body class="i18n-pending">
+    <main>
+      <header class="app-header">
+        <div class="app-title">
+          <div class="eyebrow">v0.15.0</div>
+          <h1>Live ASMR Studio</h1>
+          <p>好きなセッションを選び、ChatGPT Voice Liveの声を立体的なASMRとして聴く。</p>
+        </div>
+        <label class="language-picker" data-i18n-skip>
+          <span class="sr-only">Language</span>
+          <select id="language-selector" aria-label="Language">
+            <option value="en">English</option>
+            <option value="ja">日本語</option>
+            <option value="zh-CN">简体中文</option>
+            <option value="ko">한국어</option>
+            <option value="es">Español</option>
+          </select>
+        </label>
+      </header>
+
+      <section id="advanced-output-section" class="card hero-card advanced-product-section" hidden>
+        <h2 class="step">HRTF・出力の詳細</h2>
+        <div class="engine-switch" role="group" aria-label="音の処理方式" hidden>
+          <button class="engine active" data-mode="pan">左右振り（比較用）</button>
+          <button class="engine" data-mode="hrtf">実測HRTF（3D音響）</button>
+        </div>
+        <div class="hint">
+          実際の頭部で測った左右の音響データを使い、頭の周りの空間に声を配置する。通常利用では近距離実測データを使う。
+        </div>
+        <label class="field-label" for="hrtf-dataset-select" hidden>HRTF測定データ</label>
+        <select id="hrtf-dataset-select" hidden>
+          <option value="aalto-nearfield" selected>Aalto近距離実測（最短20cm・推奨）</option>
+        </select>
+        <div id="hrtf-dataset-description" class="hint"></div>
+        <label class="slider-label" for="hrtf-output-gain-slider">
+          HRTFだけの音量 <strong id="hrtf-output-gain">+0.0 dB / 1.0倍</strong>
+        </label>
+        <input id="hrtf-output-gain-slider" type="range" min="0.5" max="15" value="1" step="0.1" />
+        <div class="axis"><span>0.5倍</span><span>推奨初期値 1.0倍</span><span>試験上限 15倍</span></div>
+        <div class="status-grid compact">
+          <span>HRTFデータ</span><strong id="hrtf-status">未読込</strong>
+          <span>測定方向の数</span><strong id="hrtf-count">—</strong>
+          <span>元データの周波数</span><strong id="hrtf-rate">—</strong>
+          <span>現在使っている方向</span><strong id="hrtf-match">—</strong>
+        </div>
+        <div class="status-grid compact meter-grid">
+          <span>入力音声</span><strong id="hrtf-input-level">—</strong>
+          <span>HRTF加工後</span><strong id="hrtf-output-level">—</strong>
+          <span>リミッターの抑制</span><strong id="hrtf-limiter-reduction">—</strong>
+        </div>
+        <div class="hint">リミッター抑制が-6dB以下へ頻繁に下がる場合、音量を上げすぎて息や抑揚が平らになっている可能性が高い。</div>
+      </section>
+
+      <section id="advanced-texture-section" class="card texture-card advanced-product-section" hidden>
+        <h2 class="step">声の質感・振動</h2>
+        <p>密度・厚み・耳元を独立して混ぜる。推奨初期値は、検証結果に合わせて密度0%、厚み70%、耳元70%。</p>
+        <div class="texture-grid" role="group" aria-label="声の質感プリセット">
+          <button class="texture-preset" data-texture-preset="raw">原音</button>
+          <button class="texture-preset" data-texture-preset="density">密度</button>
+          <button class="texture-preset" data-texture-preset="body">厚み</button>
+          <button class="texture-preset" data-texture-preset="near-ear">耳元</button>
+          <button class="texture-preset" data-texture-preset="balanced-asmr">バランス</button>
+          <button class="texture-preset active" data-texture-preset="recommended">推奨 70/70</button>
+        </div>
+        <div id="texture-description" class="hint texture-description">密度0%、厚み70%、耳元70%の推奨ミックス。</div>
+        <label class="slider-label" for="texture-density">
+          密度 <strong id="texture-density-value">0%</strong>
+        </label>
+        <input id="texture-density" data-texture-component="density" type="range" min="0" max="100" value="0" step="5" />
+        <label class="slider-label" for="texture-body">
+          厚み <strong id="texture-body-value">70%</strong>
+        </label>
+        <input id="texture-body" data-texture-component="body" type="range" min="0" max="100" value="70" step="5" />
+        <label class="slider-label" for="texture-near-ear">
+          耳元 <strong id="texture-near-ear-value">70%</strong>
+        </label>
+        <input id="texture-near-ear" data-texture-component="nearEar" type="range" min="0" max="100" value="70" step="5" />
+        <div class="axis"><span>加工なし 0%</span><span>推奨 70%</span><span>単体最大 100%</span></div>
+        <div class="status-grid compact texture-status-grid">
+          <span>現在の質感</span><strong id="texture-status">推奨 70/70</strong>
+          <span>実際の補正</span><strong id="texture-values">—</strong>
+          <span>質感加工後</span><strong id="texture-output-level">—</strong>
+          <span>密度圧縮の抑制</span><strong id="texture-compression-reduction">—</strong>
+        </div>
+        <div class="hint">プリセットには音量差を抑える小さな補正を入れている。ただし声の内容で平均音量は変わるので、良し悪しは大きさだけで判断しない。</div>
+
+        <div class="vibration-panel">
+          <div class="motion-title">
+            <span>弱い歯擦音抑制</span><strong id="deesser-status" class="active">有効</strong>
+          </div>
+          <div class="vibration-switch" role="group" aria-label="歯擦音抑制の有効化">
+            <button class="deesser-toggle" data-deesser-enabled="false">OFF / 比較</button>
+            <button class="deesser-toggle active" data-deesser-enabled="true">ON</button>
+          </div>
+          <label class="slider-label" for="deesser-intensity">
+            抑制の強さ <strong id="deesser-intensity-value">50%</strong>
+          </label>
+          <input id="deesser-intensity" type="range" min="0" max="100" value="50" step="5" />
+          <div class="hint">6.5kHz付近を最大3dBだけ抑える。耳元70%でサ行が刺さる場合の弱い静的補正。</div>
+        </div>
+
+        <div class="vibration-panel">
+          <div class="motion-title">
+            <span>低域圧・振動（HRTF専用）</span><strong id="vibration-status" class="active">有効</strong>
+          </div>
+          <div class="vibration-switch" role="group" aria-label="低域圧・振動の有効化">
+            <button class="vibration-toggle" data-vibration-enabled="false">OFF / 比較</button>
+            <button class="vibration-toggle active" data-vibration-enabled="true">ON</button>
+          </div>
+          <div class="hint">声に元から含まれる45〜180Hzだけを抽出して戻す。固定の低音や振動音は生成しない。</div>
+          <label class="slider-label" for="vibration-intensity">
+            振動の強さ <strong id="vibration-intensity-value">80%</strong>
+          </label>
+          <input id="vibration-intensity" type="range" min="0" max="100" value="80" step="5" />
+          <div class="axis"><span>なし 0%</span><span>推奨初期値 80%</span><span>試験上限 100%</span></div>
+          <div class="status-grid compact">
+            <span>低域圧の出力</span><strong id="vibration-output-level">—</strong>
+            <span>低域圧縮の抑制</span><strong id="vibration-compression-reduction">—</strong>
+          </div>
+          <div class="hint">ヘッドホンの低域性能で効き方が変わる。HRTF音量を上げる前に、この強度だけで比較する。</div>
+        </div>
+      </section>
+
+      <section id="advanced-ambience-section" class="card ambience-card advanced-product-section" hidden>
+        <h2 class="step">環境音・部屋反射の詳細</h2>
+        <p>声とは別のステレオ層として部屋全体へ流す。生成音声の細かな粗と不自然な無音を薄く隠す実験。</p>
+        <label class="field-label" for="ambience-mode">環境</label>
+        <select id="ambience-mode">
+          <option value="off" selected>無音 / 標準</option>
+          <option value="quiet-room">静かな部屋（推奨）</option>
+          <option value="air-conditioner">空調</option>
+          <option value="night-room">夜の部屋</option>
+          <option value="distant-rain">遠い雨</option>
+        </select>
+        <div id="ambience-mode-status" class="status-text">保存状態を確認中…</div>
+        <div id="ambience-description" class="hint">薄い広帯域ルームトーン。声を邪魔しにくい基準環境。</div>
+        <label class="slider-label" for="ambience-level">
+          環境音量 <strong id="ambience-level-value">-34 dB</strong>
+        </label>
+        <input id="ambience-level" type="range" min="-48" max="-12" value="-34" step="1" />
+        <div class="axis"><span>薄い -48dB</span><span>標準 -34dB</span><span>強い -12dB</span></div>
+        <div class="status-grid compact">
+          <span>環境音の出力</span><strong id="ambience-output-level">—</strong>
+        </div>
+        <button id="ambience-preview" class="wide secondary">環境音を2秒だけ強調して確認</button>
+
+        <div class="vibration-panel">
+          <div class="motion-title">
+            <span>短い部屋反射（HRTF専用）</span><strong id="reflection-status" class="active">有効</strong>
+          </div>
+          <div class="vibration-switch" role="group" aria-label="短い部屋反射の有効化">
+            <button class="reflection-toggle" data-reflection-enabled="false">OFF / 比較</button>
+            <button class="reflection-toggle active" data-reflection-enabled="true">ON</button>
+          </div>
+          <label class="slider-label" for="reflection-intensity">
+            空気感 <strong id="reflection-intensity-value">35%</strong>
+          </label>
+          <input id="reflection-intensity" type="range" min="0" max="100" value="35" step="5" />
+          <div class="hint">7〜15msの反射だけを小さく追加する。長い残響は付けず、声の近さを残す。</div>
+        </div>
+      </section>
+
+      <section class="card session-card product-primary-section">
+        <h2 class="step">ASMRセッション</h2>
+        <button id="session-copy-primary" class="session-copy-primary" type="button">
+          <span id="session-copy-primary-label">プロンプトをコピー</span>
+          <small id="session-launch-summary">睡眠・リラックス / 添い寝・安心 / 強めの囁き / 標準</small>
+        </button>
+        <div id="session-copy-status" class="copy-status" role="status" aria-live="polite"></div>
+
+        <h3 class="session-options-heading">セッション設定</h3>
+
+        <label class="field-label" for="session-mode">内容モード</label>
+        <select id="session-mode">
+          <option value="conversation">会話ASMR</option>
+          <option value="relax" selected>睡眠・リラックス</option>
+          <option value="focus">作業・読書</option>
+          <option value="roleplay">物語・ロールプレイ</option>
+          <option value="onomatopoeia">オノマトペ</option>
+          <option value="brought-content">持ち込みコンテンツ</option>
+        </select>
+
+        <label class="field-label" for="session-template">テンプレート</label>
+        <select id="session-template"></select>
+        <div id="session-template-description" class="hint session-template-description"></div>
+
+        <label class="field-label" for="session-voice-style">発話スタイル</label>
+        <select id="session-voice-style">
+          <option value="soft-spoken">ソフトスピーキング</option>
+          <option value="natural-whisper">自然な囁き</option>
+          <option value="deep-whisper" selected>強めの囁き</option>
+          <option value="sleep-relaxation">睡眠・リラックス</option>
+          <option value="custom">カスタム</option>
+        </select>
+        <div id="session-voice-style-description" class="hint"></div>
+
+        <div class="session-behavior-card">
+          <span>進行方式</span>
+          <strong id="session-behavior-name">受動セッション</strong>
+          <p id="session-behavior-description">質問せず一度の返答で進み、割り込み時だけ自然に応答する。</p>
+        </div>
+
+        <div id="session-length-field">
+          <label class="field-label" for="session-length">内容量</label>
+          <select id="session-length">
+            <option value="short">コンパクト</option>
+            <option value="medium" selected>標準</option>
+            <option value="long">じっくり</option>
+          </select>
+        </div>
+
+        <div class="session-outline-card">
+          <span>進行概要</span>
+          <p id="session-outline-summary">隣にいる静かな始まりから、質問せず静かに終えるまでを固定された順番で進める。</p>
+        </div>
+
+        <details class="session-customization">
+          <summary>カスタマイズ</summary>
+          <label class="field-label" for="session-custom-instructions">追加したい設定</label>
+          <textarea id="session-custom-instructions" class="compact-textarea" rows="4"
+                    placeholder="例：語り手の名前、関係性、舞台、入れてほしい話題"></textarea>
+          <label class="field-label" for="session-avoid">避けたい内容</label>
+          <textarea id="session-avoid" class="compact-textarea" rows="3"
+                    placeholder="例：質問、恋愛表現、大きな効果音"></textarea>
+        </details>
+
+        <div id="session-source-field" hidden>
+          <label class="field-label" for="session-source-content">持ち込みコンテンツ</label>
+          <textarea id="session-source-content" class="source-content-textarea" rows="10"
+                    placeholder="読み上げ、言い換え、解説、物語化したい文章を貼り付ける"></textarea>
+        </div>
+
+        <details class="session-prompt-preview">
+          <summary>生成されたプロンプトを確認</summary>
+          <label class="field-label" for="session-prompt">ChatGPT Voice Liveへ渡すプロンプト</label>
+          <textarea id="session-prompt" class="session-prompt" rows="18" readonly></textarea>
+        </details>
+      </section>
+
+      <section class="card product-status-card">
+        <div class="product-status-row">
+          <div>
+            <h2 class="step">接続状態</h2>
+            <strong id="product-connection-status">ChatGPTタブを確認中…</strong>
+          </div>
+          <div class="product-status-actions">
+            <button id="product-mute" class="secondary" disabled>ミュート</button>
+            <button id="product-stop" class="secondary" disabled>停止</button>
+          </div>
+        </div>
+        <div id="product-capture-target" class="capture-target">対象タブ: —</div>
+        <div class="product-readiness" aria-label="開始準備">
+          <span id="product-prompt-readiness">プロンプト未コピー</span>
+          <span id="product-audio-readiness">音声未接続</span>
+        </div>
+        <div id="product-connection-hint" class="hint">ChatGPTタブで拡張機能アイコンを押すと音声処理を開始します。</div>
+        <div id="product-error" class="product-error" role="alert" hidden></div>
+        <button id="product-reconnect" class="wide secondary">接続方法を確認</button>
+      </section>
+
+      <section class="card quick-sound-card">
+        <h2 class="step">すぐ触れる音</h2>
+        <p>普段使う音量、声の位置、動き、環境音だけをまとめる。</p>
+
+        <label class="slider-label" for="quick-output-gain">
+          声の音量 <strong id="quick-output-gain-value">1.0倍</strong>
+        </label>
+        <input id="quick-output-gain" type="range" min="0.5" max="15" value="1" step="0.1" />
+        <div class="axis"><span>小さい 0.5倍</span><span>10倍</span><span>最大 15倍</span></div>
+
+        <label class="field-label">声の位置と距離</label>
+        <div id="spatial-map" class="spatial-map" role="application" tabindex="0"
+             aria-label="声の方向と距離。ドラッグ、または左右の矢印で5度、上下の矢印で5センチずつ変更"
+             aria-describedby="spatial-keyboard-hint">
+          <span class="direction-label front">前</span>
+          <span class="direction-label back">後ろ</span>
+          <span class="direction-label left">左</span>
+          <span class="direction-label right">右</span>
+          <span class="distance-ring ring-near" aria-hidden="true"></span>
+          <span class="distance-ring ring-mid" aria-hidden="true"></span>
+          <span class="distance-ring ring-far" aria-hidden="true"></span>
+          <span class="listener-dot" aria-hidden="true"><b>自分</b></span>
+          <span id="voice-source-dot" class="voice-source-dot" aria-hidden="true"><b>声</b></span>
+        </div>
+        <div class="distance-key">
+          <span>中心 超近接・推定</span><span>実測 20〜50cm</span><span>表示上限 2.06m</span>
+        </div>
+        <div class="status-grid compact quick-spatial-status">
+          <span>現在の声</span><strong id="spatial-position" role="status" aria-live="polite">左後方 -110° / 10cm（推定）</strong>
+        </div>
+        <div id="spatial-keyboard-hint" class="hint">円を選択すると、矢印キーでも方向と距離を調整できる。</div>
+
+        <label class="field-label">固定位置</label>
+        <div class="quick-position-grid" role="group" aria-label="声の位置">
+          <button class="quick-position" data-azimuth="-110">左後方</button>
+          <button class="quick-position" data-azimuth="0">正面</button>
+          <button class="quick-position" data-azimuth="110">右後方</button>
+          <button class="quick-position" data-azimuth="180">後ろ</button>
+        </div>
+        <label class="field-label" for="quick-distance">声の距離</label>
+        <select id="quick-distance">
+          <option value="0.1" selected>超近接 / 10cm（推定）</option>
+          <option value="0.2">普通 / 20cm</option>
+          <option value="0.4">少し遠い / 40cm</option>
+        </select>
+
+        <label class="field-label" for="quick-motion-pattern">声の動き</label>
+        <div class="quick-action-row">
+          <select id="quick-motion-pattern">
+            <option value="behind-sweep" selected>左 → 後ろ → 右</option>
+            <option value="front-sweep">左 → 正面 → 右</option>
+            <option value="slow-orbit">ゆっくり一周</option>
+            <option value="ear-alternating">左右の耳元を交互</option>
+            <option value="left-pullback">左耳：離れて戻る</option>
+            <option value="right-pullback">右耳：離れて戻る</option>
+            <option value="random-drift">ゆっくりランダム</option>
+          </select>
+          <button id="quick-motion-toggle" class="primary" disabled>動きを開始</button>
+        </div>
+        <div id="motion-description" class="hint motion-description"></div>
+
+        <div class="quick-motion-timing">
+          <label class="slider-label" for="motion-duration">
+            動き全体の長さ <strong id="motion-duration-value">1サイクル 24秒</strong>
+          </label>
+          <input id="motion-duration" type="range" min="8" max="90" value="24" step="1" />
+          <div class="axis"><span>速い 8秒</span><span>標準 24秒</span><span>ゆっくり 90秒</span></div>
+
+          <div id="rear-transition-control">
+            <label class="slider-label" for="rear-transition-duration">
+              <span id="motion-transition-label">後ろを通る片道時間</span>
+              <strong id="rear-transition-duration-value">3.0秒</strong>
+            </label>
+            <input id="rear-transition-duration" type="range" min="0.6" max="5" value="3" step="0.1" />
+            <div class="axis"><span>素早く 0.6秒</span><span>標準 3.0秒</span><span>ゆっくり 5秒</span></div>
+            <div id="motion-timing-summary" class="hint"></div>
+          </div>
+        </div>
+
+        <label class="field-label" for="quick-ambience-mode">環境音</label>
+        <select id="quick-ambience-mode">
+          <option value="off" selected>無音 / 標準</option>
+          <option value="quiet-room">静かな部屋</option>
+          <option value="air-conditioner">空調</option>
+          <option value="night-room">夜の部屋</option>
+          <option value="distant-rain">遠い雨</option>
+        </select>
+        <label class="slider-label" for="quick-ambience-level">
+          環境音量 <strong id="quick-ambience-level-value">-34 dB</strong>
+        </label>
+        <input id="quick-ambience-level" type="range" min="-48" max="-12" value="-34" step="1" />
+
+        <button id="quick-channel-check" class="wide secondary">左右の聴こえ方を確認</button>
+        <div class="hint">左、右の順に短い確認音を鳴らす。通常の音声処理は実測HRTFを使う。</div>
+      </section>
+
+      <section class="card settings-toggle-card">
+        <button id="advanced-settings-toggle" class="wide disclosure-button" aria-expanded="false"
+                aria-controls="advanced-output-section advanced-texture-section advanced-ambience-section advanced-prompt-section advanced-spatial-section advanced-capture-section advanced-settings-management-section">
+          詳細設定を開く
+        </button>
+        <div class="hint">質感、振動、反射、HRTFデータなど、通常は触らなくてよい項目を調整する。</div>
+      </section>
+
+      <section class="card developer-toggle-card" hidden>
+        <button id="developer-lab-toggle" class="wide disclosure-button" aria-expanded="false"
+                aria-controls="developer-passive-test-section developer-diagnostics-section developer-reload-section">
+          開発者ラボを開く
+        </button>
+        <div class="hint">場面量テスト、左右振り比較、診断、開発版の再読み込み。</div>
+      </section>
+
+      <section id="developer-passive-test-section" class="card passive-test-card developer-lab-section" hidden>
+        <h2 class="step">ランダム場面量テスト</h2>
+        <p>時間は指示せず、3・6・9・12枚の場面カードを渡したときに一度の応答が実際に何分続くかを測る。</p>
+
+        <label class="field-label" for="passive-test-scene-count">場面カード数</label>
+        <select id="passive-test-scene-count">
+          <option value="3">3場面 / 基準</option>
+          <option value="6">6場面 / 2倍</option>
+          <option value="9">9場面 / 3倍</option>
+          <option value="12">12場面 / 4倍</option>
+        </select>
+        <button id="passive-test-regenerate" class="wide secondary">場面を再抽選</button>
+
+        <label class="field-label" for="passive-test-prompt">ランダム場面カードつきプロンプト</label>
+        <textarea id="passive-test-prompt" class="passive-test-prompt" rows="14" readonly></textarea>
+        <div class="prompt-actions">
+          <button id="passive-test-copy" class="secondary">プロンプトをコピー</button>
+          <button id="passive-test-start" class="primary" disabled>3場面で計測開始</button>
+        </div>
+        <button id="passive-test-stop" class="wide secondary" disabled>テストを停止</button>
+        <div id="passive-test-copy-status" class="copy-status" role="status" aria-live="polite"></div>
+
+        <div class="status-grid compact">
+          <span>状態</span><strong id="passive-test-status">待機中</strong>
+          <span>計測時間</span><strong id="passive-test-elapsed">0:00</strong>
+          <span>推定応答時間</span><strong id="passive-test-response-duration">0:00</strong>
+          <span>音声検出</span><strong id="passive-test-speech">未検出</strong>
+          <span>現在の無音</span><strong id="passive-test-silence">0.0秒</strong>
+          <span>最長無音</span><strong id="passive-test-longest-silence">0.0秒</strong>
+          <span>結果</span><strong id="passive-test-result">—</strong>
+        </div>
+        <div id="passive-test-hint" class="hint">先に3場面用プロンプトをChatGPT Voice Liveへ貼り付ける。返答開始後に計測し、12秒無音になった時点を通常の応答終了として記録する。</div>
+      </section>
+
+      <section id="advanced-prompt-section" class="card prompt-card advanced-product-section" hidden>
+        <h2 class="step">発話スタイルの詳細編集</h2>
+        <p>セッション作成で選んだ発話スタイルの文章を調整する。</p>
+
+        <label class="field-label" for="voice-prompt-preset">発話プリセット</label>
+        <select id="voice-prompt-preset">
+          <option value="soft-spoken">ソフトスピーキング</option>
+          <option value="natural-whisper">自然な囁き</option>
+          <option value="deep-whisper" selected>強めの囁き</option>
+          <option value="sleep-relaxation">睡眠・リラックス</option>
+          <option value="custom">カスタム</option>
+        </select>
+
+        <div id="voice-prompt-description" class="hint prompt-description"></div>
+        <label class="field-label prompt-text-label" for="voice-prompt-text">
+          コピーされる文章 <strong id="voice-prompt-name">強めの囁き</strong>
+        </label>
+        <textarea id="voice-prompt-text" rows="14" spellcheck="false" aria-describedby="voice-prompt-description"></textarea>
+
+        <div class="prompt-actions">
+          <button id="copy-voice-prompt" class="primary">プロンプトをコピー</button>
+          <button id="reset-voice-prompt" class="secondary">プリセットに戻す</button>
+        </div>
+        <div id="voice-prompt-copy-status" class="copy-status" role="status" aria-live="polite"></div>
+        <div class="hint">これは公開された内部コマンドではなく、発話スタイルを会話内でまとめて伝えるための指示文。自動送信はせず、コピーだけ行う。</div>
+      </section>
+
+      <section id="advanced-spatial-section" class="card spatial-card advanced-product-section" hidden>
+        <h2 class="step">位置・モーションの詳細</h2>
+        <div class="status-grid compact">
+          <span>左右の耳から見た角度</span><strong id="parallax-position">—</strong>
+          <span>近接時の左右補正</span><strong id="near-field-gains">—</strong>
+        </div>
+
+        <div class="motion-panel">
+          <div class="motion-title">
+            <span>シームレス自動モーション</span><strong id="motion-status">停止中</strong>
+          </div>
+          <label class="field-label" for="motion-pattern">移動パターン</label>
+          <select id="motion-pattern">
+            <option value="behind-sweep" selected>左 → 後ろ → 右</option>
+            <option value="front-sweep">左 → 正面 → 右</option>
+            <option value="slow-orbit">頭の周りをゆっくり一周</option>
+            <option value="ear-alternating">左右の耳元を交互に往復</option>
+            <option value="left-pullback">左耳で離れて戻る</option>
+            <option value="right-pullback">右耳で離れて戻る</option>
+            <option value="random-drift">ランダムに漂う</option>
+          </select>
+
+          <div class="motion-actions">
+            <button id="motion-start" class="primary">モーション開始</button>
+            <button id="motion-stop" class="secondary" disabled>現在位置で停止</button>
+          </div>
+          <div class="hint">左右110°で話す時間を長く取り、移動中も声を切らずに後ろを通す。開始時の声の距離を8〜50cmの範囲で基準にする。初期距離は10cm。モーション中に地図をドラッグするか固定位置を押すと、自動移動を止めて手動操作へ戻る。</div>
+        </div>
+
+        <div class="position-grid">
+          <button class="hrtf-position" data-azimuth="-110">左後方 110°</button>
+          <button class="hrtf-position" data-azimuth="0">正面 0°</button>
+          <button class="hrtf-position" data-azimuth="110">右後方 110°</button>
+          <button class="hrtf-position" data-azimuth="180">後ろ 180°</button>
+        </div>
+        <div class="hint">通常画面の青い「声」をドラッグして位置を変える。20cm未満は最短20cmの実測データへ限定的な超近接補正を加えた推定。真横8.75cm付近では、内部計算だけ最短1cmに制限する。</div>
+      </section>
+
+      <section id="advanced-capture-section" class="card capture-card advanced-product-section" hidden>
+        <h2 class="step">ChatGPT Voice Liveタブの音声キャプチャ</h2>
+        <p>ChatGPTのタブを前面にして、ブラウザ右上のこの拡張機能アイコンを押すと開始・再接続する。</p>
+        <div class="actions">
+          <button id="restart" class="primary">再接続のやり方</button>
+          <button id="stop" class="secondary">音声処理を停止</button>
+        </div>
+        <div class="status-grid">
+          <span>音声処理</span><strong id="engine-status">確認中…</strong>
+          <span>タブ音声取得</span><strong id="capture-status">確認中…</strong>
+          <span>取得した音声</span><strong id="track-status">—</strong>
+          <span>Web Audio周波数</span><strong id="context-rate">—</strong>
+        </div>
+        <button id="mute" class="wide danger" disabled>加工後の音だけミュート</button>
+      </section>
+
+      <section id="advanced-settings-management-section" class="card settings-management-card advanced-product-section" hidden>
+        <h2 class="step">設定の管理</h2>
+        <p>現在の調整値をJSONで保存・復元する。初期値へ戻す場合は、警告の確認履歴を除く音響設定とセッション設定を消す。</p>
+        <div class="actions">
+          <button id="settings-export" class="secondary">設定を書き出す</button>
+          <button id="settings-import" class="secondary">設定を読み込む</button>
+        </div>
+        <input id="settings-import-file" type="file" accept="application/json,.json" hidden />
+        <button id="settings-reset" class="wide danger">設定を初期値へ戻す</button>
+        <div id="settings-management-status" class="copy-status" role="status" aria-live="polite"></div>
+      </section>
+
+      <details id="developer-diagnostics-section" class="card diagnostics developer-lab-section" hidden>
+        <summary>診断・左右振りとの比較（普段は開かなくてOK）</summary>
+        <div class="two-col top-gap">
+          <button id="test-left">左だけにテスト音</button>
+          <button id="test-right">右だけにテスト音</button>
+        </div>
+        <section class="pan top-gap" aria-label="比較用の左右振り">
+          <button class="position" data-pan="-1">左だけ</button>
+          <button class="position active" data-pan="0">中央</button>
+          <button class="position" data-pan="1">右だけ</button>
+        </section>
+        <div class="status-grid compact">
+          <span>左の音量</span><strong id="gain-left">—</strong>
+          <span>右の音量</span><strong id="gain-right">—</strong>
+        </div>
+      </details>
+
+      <section id="developer-reload-section" class="card reload-card developer-lab-section" hidden>
+        <h2 class="step">開発ファイルを更新したあと</h2>
+        <p>下のボタンを1回押すと、このフォルダから拡張機能を読み直す。ZIPの入れ直しは不要。</p>
+        <button id="reload-extension" class="wide secondary">開発版を再読み込み</button>
+      </section>
+
+      <div id="error" class="error" role="alert"></div>
+      <p class="note">Aalto近距離版は20〜50cmの実測HRTFを使う。20cm未満は、最短20cmの実測ペアへ限定的な超近接補正を加えた推定位置。</p>
+    </main>
+
+    <dialog id="high-gain-dialog" class="product-dialog" aria-labelledby="high-gain-title" aria-describedby="high-gain-description">
+      <h2 id="high-gain-title">10倍以上の音量を使いますか？</h2>
+      <p id="high-gain-description">急に大きな音が出る可能性がある。ヘッドホン側の音量を下げてから続けてください。この確認は承認後は表示しません。</p>
+      <div class="dialog-actions">
+        <button id="high-gain-cancel" class="secondary" type="button">元の音量へ戻す</button>
+        <button id="high-gain-confirm" class="primary" type="button">理解して続ける</button>
+      </div>
+    </dialog>
+    <script src="ui-locales.generated.js"></script>
+    <script src="i18n.js"></script>
+    <script src="passive-test-config.js"></script>
+    <script src="session-prompt-config.js"></script>
+    <script src="sidepanel.js"></script>
+  </body>
+</html>

@@ -1,0 +1,25 @@
+name: Extension checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: node scripts/test_localization.js
+      - run: node scripts/test_session_prompt_config.js
+      - run: node scripts/test_background_capture.js
+      - run: node scripts/test_v071_ambience.js
+      - run: python scripts/package_extension.py

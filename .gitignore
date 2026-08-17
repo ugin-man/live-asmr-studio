@@ -1,0 +1,12 @@
+packages/*.zip
+tmp/
+output/
+audit/
+.playwright-cli/
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
+audit/**/server.stdout.log
+audit/**/server.stderr.log
