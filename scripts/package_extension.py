@@ -16,6 +16,8 @@ def main() -> None:
     if target.parent != package_directory:
         raise RuntimeError("Package target escaped the packages directory.")
 
+    package_directory.mkdir(parents=True, exist_ok=True)
+
     excluded = {
         Path("assets/icons/icon-source-1024.png"),
     }
