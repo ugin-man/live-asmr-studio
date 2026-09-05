@@ -162,6 +162,30 @@ async function main() {
     hrtfSettingsRevision: 6
   };
   let messageListener = null;
+  let backgroundListener = null;
+  const engineSender = { id: 'test-extension', url: 'chrome-extension://test-extension/offscreen.html' };
+  const workerContext = vm.createContext({
+    console, URL,
+    chrome: {
+      runtime: {
+        id: engineSender.id,
+        getURL: (file) => `chrome-extension://test-extension/${file}`,
+        onMessage: { addListener(listener) { backgroundListener = listener; } }
+      },
+      action: { onClicked: { addListener() {} } },
+      storage: { local: {
+        async get(keys) {
+          await new Promise((resolve) => setTimeout(resolve, 12));
+          return Object.fromEntries(keys.map((key) => [key, storage[key]]));
+        },
+        async set(values) {
+          await new Promise((resolve) => setTimeout(resolve, 4));
+          Object.assign(storage, values);
+        }
+      } }
+    }
+  });
+  vm.runInContext(fs.readFileSync(path.join(extensionRoot, 'background.js'), 'utf8'), workerContext);
   const context = vm.createContext({
     AudioContext: FakeAudioContext,
     clearInterval,
@@ -172,21 +196,13 @@ async function main() {
     setTimeout,
     chrome: {
       runtime: {
+        async sendMessage(message) {
+          assert.equal(message.target, 'background');
+          return new Promise((resolve) => backgroundListener(message, engineSender, resolve));
+        },
         onMessage: {
           addListener(listener) {
             messageListener = listener;
-          }
-        }
-      },
-      storage: {
-        local: {
-          async get(keys) {
-            await new Promise((resolve) => setTimeout(resolve, 12));
-            return Object.fromEntries(keys.map((key) => [key, storage[key]]));
-          },
-          async set(values) {
-            await new Promise((resolve) => setTimeout(resolve, 4));
-            Object.assign(storage, values);
           }
         }
       }
@@ -283,9 +299,8 @@ async function main() {
     'distant-rain');
   assert.equal(storage.ambienceMode, 'distant-rain');
 
-  // Reproduce the actual v0.7.2 failure: chrome.storage is unavailable in the
-  // calling context. Switching must still work in memory instead of throwing.
-  vm.runInContext('globalThis.savedStorageForTest = chrome.storage; chrome.storage = undefined', context);
+  // Real offscreen restrictions apply throughout this test, not just this case.
+  assert.equal(context.chrome.storage, undefined);
   const noStorageResponse = await send('set-ambience-settings', {
     mode: 'night-room',
     levelDb: -17
@@ -293,7 +308,8 @@ async function main() {
   assert.equal(noStorageResponse.ok, true);
   assert.equal(noStorageResponse.state.ambience.mode, 'night-room');
   assert.equal(noStorageResponse.state.ambience.levelDb, -17);
-  vm.runInContext('chrome.storage = savedStorageForTest', context);
+  assert.equal(storage.ambienceMode, 'night-room');
+  assert.equal(storage.ambienceLevelDb, -17);
   await send('set-ambience-settings', { mode: 'distant-rain', levelDb: -18 });
 
   const fakeContext = vm.runInContext('audioContext', context);
@@ -345,8 +361,6 @@ async function main() {
 
   vm.runInContext(`
     passiveTestAmplitude = 0.1;
-    globalThis.savedStorageForPassiveTest = chrome.storage;
-    chrome.storage = undefined;
     hrtfMotion.active = true;
   `, context);
   vm.runInContext(`beginPassiveTestMonitoring({
@@ -370,7 +384,6 @@ async function main() {
     'publicPassiveTestState().estimatedResponseSeconds < publicPassiveTestState().elapsedSeconds',
     context));
   assert.equal(vm.runInContext('hrtfMotion.active', context), false);
-  vm.runInContext('chrome.storage = savedStorageForPassiveTest', context);
 
   vm.runInContext('passiveTestAmplitude = 0.1', context);
   vm.runInContext(`beginPassiveTestMonitoring({
@@ -408,7 +421,7 @@ async function main() {
   assert.equal(vm.runInContext('stream', context), null);
   assert.equal(vm.runInContext('audioContext', context), null);
 
-  console.log('v0.15.0 ambience, rollback and passive-state test passed');
+  console.log('v0.15.1 ambience, rollback and passive-state test passed');
 }
 
 main().catch((error) => {

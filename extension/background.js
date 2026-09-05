@@ -5,6 +5,12 @@ let capturePhase = 'idle';
 let lastCaptureError = null;
 let lastCaptureAttemptTab = null;
 
+function enqueueCapture(operation) {
+  const pending = captureQueue.catch(() => {}).then(operation);
+  captureQueue = pending.catch(() => {});
+  return pending;
+}
+
 async function hasOffscreenDocument() {
   const contexts = await chrome.runtime.getContexts({});
   return contexts.some((context) => context.contextType === 'OFFSCREEN_DOCUMENT');
@@ -94,12 +100,14 @@ async function captureInvokedTab(tab, streamIdPromise) {
 
   const generation = ++latestCaptureGeneration;
   const previousAttemptTabId = lastCaptureAttemptTab?.id;
-  lastCaptureAttemptTab = await tabMetadata(tab);
+  lastCaptureAttemptTab = { id: tab.id, title: tab.title || '', url: tab.url || '', host: hostForUrl(tab.url || '') };
   lastCaptureError = null;
   capturePhase = 'starting';
 
-  const operation = Promise.resolve(streamIdPromise).then((streamId) => {
-    const transition = captureQueue.catch(() => {}).then(async () => {
+  // Handle rejection immediately, including while an older capture is starting.
+  const operation = Promise.resolve(streamIdPromise)
+    .then((streamId) => ({ streamId }), (error) => ({ error }))
+    .then(({ streamId, error }) => enqueueCapture(async () => {
     if (generation !== latestCaptureGeneration) return { cancelled: true };
 
     if (previousAttemptTabId && previousAttemptTabId !== tab.id) {
@@ -113,7 +121,17 @@ async function captureInvokedTab(tab, streamIdPromise) {
     }
 
     const existing = await sendToAudioEngine({ type: 'get-state' });
+    if (generation !== latestCaptureGeneration) return { cancelled: true };
     const previousTabId = existing?.tabId;
+    // Opening the panel on the already captured tab must not restart audio.
+    // Chrome may reject a redundant stream request; the live stream is valid.
+    if (existing?.capturing && previousTabId === tab.id) {
+      capturePhase = 'active';
+      lastCaptureError = null;
+      await setBadge(tab.id, 'ON');
+      return existing;
+    }
+    if (error) throw error;
     if (existing?.capturing || previousTabId) {
       await sendToAudioEngine({ type: 'stop-capture' });
       if (previousTabId) await setBadge(previousTabId, '');
@@ -139,10 +157,7 @@ async function captureInvokedTab(tab, streamIdPromise) {
     lastCaptureError = null;
     await setBadge(tab.id, 'ON');
     return state;
-    });
-    captureQueue = transition.catch(() => {});
-    return transition;
-  }).catch(async (error) => {
+    })).catch(async (error) => {
     if (generation === latestCaptureGeneration) {
       capturePhase = 'error';
       lastCaptureError = error?.message || String(error);
@@ -158,7 +173,7 @@ async function productState() {
   const state = await sendToAudioEngine({ type: 'get-state' });
   const activeTab = state?.tabId ? await tabMetadata(state.tabId) : null;
   const capture = state?.tabId ? await getCaptureInfo(state.tabId) : null;
-  if (state?.capturing) capturePhase = 'active';
+  if (state?.capturing && !['starting', 'stopping', 'error'].includes(capturePhase)) capturePhase = 'active';
   else if (capturePhase === 'active') capturePhase = 'idle';
   return {
     state,
@@ -197,11 +212,29 @@ chrome.action.onClicked.addListener((tab) => {
   });
 });
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.target !== 'background') return;
 
   (async () => {
     switch (message.type) {
+      case 'audio-settings-get':
+      case 'audio-settings-set': {
+        if (sender.id !== chrome.runtime.id
+            || sender.url !== chrome.runtime.getURL('offscreen.html')) {
+          throw new Error('Audio settings requests must come from the audio engine.');
+        }
+        const keys = message.type === 'audio-settings-get'
+          ? message.keys : Object.keys(message.values || {});
+        if (!Array.isArray(keys) || !keys.every((key) => typeof key === 'string'
+            && /^(hrtf|texture|vibration|deEsser|earlyReflections|ambience)/.test(key))) {
+          throw new Error('Invalid audio settings keys.');
+        }
+        if (message.type === 'audio-settings-get') {
+          return { ok: true, values: await chrome.storage.local.get(keys) };
+        }
+        await chrome.storage.local.set(message.values);
+        return { ok: true };
+      }
       case 'prepare-engine':
         await ensureOffscreenDocument();
         return { ok: true };
@@ -215,10 +248,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           capture: tabId ? await getCaptureInfo(tabId) : null
         };
       }
-      case 'stop-capture':
+      case 'stop-capture': {
         latestCaptureGeneration += 1;
         lastCaptureError = null;
-        return { ok: true, state: await stopCurrentCapture() };
+        capturePhase = 'stopping';
+        const attemptTabId = lastCaptureAttemptTab?.id;
+        return { ok: true, state: await enqueueCapture(async () => {
+          const stopped = await stopCurrentCapture();
+          if (attemptTabId) await setBadge(attemptTabId, '');
+          return stopped;
+        }) };
+      }
       case 'capture-ended':
         if (message.tabId) await setBadge(message.tabId, '');
         {

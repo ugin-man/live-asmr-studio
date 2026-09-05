@@ -184,7 +184,7 @@ async function main() {
   }, () => 0.99);
   assert.equal(deterministicA, deterministicB);
 
-  console.log('v0.15.0 five-locale deterministic session localization test passed');
+  console.log('v0.15.1 five-locale deterministic session localization test passed');
 }
 
 main().catch((error) => {

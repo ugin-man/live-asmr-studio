@@ -171,10 +171,11 @@ let voicePromptStatusTimer = null;
 let lastCopiedSessionPrompt = '';
 let sessionSettingsSaveTimer = null;
 let sessionPromptStatusTimer = null;
-let motionDurationSaveTimer = null;
-let rearTransitionSaveTimer = null;
 let motionUiPollTimer = null;
 let audioDiagnosticsPollTimer = null;
+let pendingMotionSettings = null;
+let motionSettingsTimer = null;
+let motionSettingsQueue = Promise.resolve();
 const AUDIO_ENGINE_REQUEST_SEQUENCE = Symbol('audioEngineRequestSequence');
 let nextAudioEngineRequestSequence = 0;
 let lastRenderedAudioEngineRequestSequence = 0;
@@ -182,8 +183,6 @@ let lastRenderedAudioEngineRequestSequence = 0;
 const PRODUCT_PREFERENCE_STORAGE = Object.freeze({
   highGainWarningAccepted: 'highGainWarningAcceptedV1'
 });
-
-const PRODUCT_SETTING_KEY_PATTERN = /^(hrtf|texture|vibration|deEsser|earlyReflections|ambience|voicePrompt|sessionPrompt|motion)/;
 
 const VOICE_PROMPT_STORAGE = Object.freeze({
   selectedPreset: 'voicePromptSelectedPreset',
@@ -602,8 +601,7 @@ function scheduleOutputGain(value) {
 }
 
 function productSettingsFromStorage(values) {
-  return Object.fromEntries(Object.entries(values || {})
-    .filter(([key]) => PRODUCT_SETTING_KEY_PATTERN.test(key)));
+  return ProductSettings.pick(values);
 }
 
 async function exportProductSettings() {
@@ -611,7 +609,7 @@ async function exportProductSettings() {
   const payload = {
     schemaVersion: 1,
     product: 'Live ASMR Studio',
-    version: '0.15.0',
+    version: '0.15.1',
     exportedAt: new Date().toISOString(),
     settings: productSettingsFromStorage(values)
   };
@@ -625,7 +623,7 @@ async function exportProductSettings() {
 }
 
 async function importProductSettings(file) {
-  if (!file) return;
+  if (!file) return false;
   if (file.size > 1024 * 1024) throw new Error('設定ファイルが大きすぎます。');
   const payload = JSON.parse(await file.text());
   const compatibleProducts = new Set(['Live ASMR Studio', 'GPT Live ASMR']);
@@ -634,9 +632,15 @@ async function importProductSettings(file) {
       || Array.isArray(payload.settings)) {
     throw new Error('Live ASMR Studioの設定ファイルではありません。');
   }
-  const settings = productSettingsFromStorage(payload.settings);
+  const settings = ProductSettings.validate(payload.settings);
   if (!Object.keys(settings).length) throw new Error('読み込める設定がありません。');
+  if (settings.hrtfOutputGain >= 10 && !highGainWarningAccepted) {
+    if (!await requestHighGainPermission()) return false;
+    highGainWarningAccepted = true;
+    settings[PRODUCT_PREFERENCE_STORAGE.highGainWarningAccepted] = true;
+  }
   await writeLocalSettings(settings);
+  return true;
 }
 
 async function resetProductSettings() {
@@ -1228,8 +1232,9 @@ function updateAudioDiagnosticsPolling(active) {
 function renderMotionState(hrtf, capturing) {
   const motion = hrtf.motion || {};
   const active = Boolean(motion.active);
-  const activePattern = MOTION_PATTERNS[motion.pattern] ? motion.pattern : selectedMotionPattern();
-  if (active) {
+  const activePattern = active && MOTION_PATTERNS[motion.pattern]
+    ? motion.pattern : selectedMotionPattern();
+  if (active && !pendingMotionSettings) {
     motionPattern.value = activePattern;
     if (Number.isFinite(Number(motion.durationSeconds))) {
       motionDuration.value = String(motion.durationSeconds);
@@ -1238,20 +1243,19 @@ function renderMotionState(hrtf, capturing) {
       rearTransitionDuration.value = String(motion.rearTransitionSeconds);
     }
   }
-  const duration = Number(motionDuration.value);
-  quickMotionPattern.value = activePattern;
+  quickMotionPattern.value = pendingMotionSettings?.pattern || activePattern;
   renderMotionTiming();
   renderMotionDescription();
   motionStatus.textContent = active
     ? `動作中 / ${MOTION_PATTERNS[activePattern].name}`
     : motion.lastError ? `停止 / ${motion.lastError}` : '停止中';
   motionStatus.classList.toggle('active', active);
-  motionPattern.disabled = active || busyHrtf;
-  quickMotionPattern.disabled = active || busyHrtf;
-  motionDuration.disabled = active || busyHrtf;
+  motionPattern.disabled = busyHrtf;
+  quickMotionPattern.disabled = busyHrtf;
+  motionDuration.disabled = busyHrtf;
   rearTransitionControl.hidden = !usesTransitionTiming(
-    active ? activePattern : selectedMotionPattern());
-  rearTransitionDuration.disabled = active || busyHrtf;
+    pendingMotionSettings?.pattern || (active ? activePattern : selectedMotionPattern()));
+  rearTransitionDuration.disabled = busyHrtf;
   motionStartButton.disabled = !capturing || active || busyHrtf;
   motionStopButton.disabled = !active || busyHrtf;
   quickMotionToggle.disabled = !capturing || busyHrtf;
@@ -1291,7 +1295,7 @@ async function initializeMotionControls() {
 function renderState(state) {
   const requestSequence = Number(state?.[AUDIO_ENGINE_REQUEST_SEQUENCE]);
   if (Number.isFinite(requestSequence)
-      && requestSequence < lastRenderedAudioEngineRequestSequence) return;
+      && requestSequence < lastRenderedAudioEngineRequestSequence) return false;
   if (Number.isFinite(requestSequence)) {
     lastRenderedAudioEngineRequestSequence = requestSequence;
   }
@@ -1405,6 +1409,7 @@ function renderState(state) {
     button.disabled = !capturing || busyHrtf;
     button.classList.toggle('active', Number(button.dataset.azimuth) === azimuth);
   }
+  return true;
 }
 
 async function sendToAudioEngine(type, extra = {}) {
@@ -1450,6 +1455,8 @@ function renderProductContext(product) {
   if (phase === 'starting') {
     productConnectionStatus.textContent = '接続処理中…';
     productConnectionHint.textContent = '対象タブの音声取得とHRTFの準備をしています。';
+    productStopButton.disabled = false;
+    stopButton.disabled = false;
   } else if (capturing) {
     productConnectionHint.textContent = '選択したタブ音声を端末内で実測HRTF処理しています。';
   }
@@ -1476,6 +1483,7 @@ async function refreshCaptureStatus(state) {
 }
 
 async function refresh() {
+  const requestSequence = ++nextAudioEngineRequestSequence;
   try {
     const response = await chrome.runtime.sendMessage({
       target: 'background', type: 'get-product-state'
@@ -1483,10 +1491,15 @@ async function refresh() {
     if (!response?.ok || !response.product?.state) {
       throw new Error(response?.error || '製品状態を確認できません。');
     }
+    Object.defineProperty(response.product.state, AUDIO_ENGINE_REQUEST_SEQUENCE, {
+      value: requestSequence
+    });
+    if (!renderState(response.product.state)) return;
+    if (latestProductState?.lastError && !response.product.lastError) showError();
     latestProductState = response.product;
-    renderState(response.product.state);
     renderProductContext(response.product);
   } catch (error) {
+    if (requestSequence < lastRenderedAudioEngineRequestSequence) return;
     renderState({ capturing: false, mode: 'hrtf', pan: 0, hrtf: {} });
     captureStatus.textContent = '未報告';
     if (error?.message) showError(error.message);
@@ -1856,45 +1869,52 @@ hrtfDatasetSelect.addEventListener('change', async () => {
   }
 });
 
-motionPattern.addEventListener('change', async () => {
+function scheduleMotionSettingsUpdate() {
+  const settings = {
+    pattern: selectedMotionPattern(),
+    durationSeconds: Number(motionDuration.value),
+    rearTransitionSeconds: Number(rearTransitionDuration.value)
+  };
+  pendingMotionSettings = settings;
+  clearTimeout(motionSettingsTimer);
+  motionSettingsTimer = setTimeout(() => {
+    motionSettingsQueue = motionSettingsQueue.catch(() => {}).then(async () => {
+      if (pendingMotionSettings !== settings) return;
+      try {
+        await writeLocalSettings({
+          [MOTION_UI_STORAGE.pattern]: settings.pattern,
+          [MOTION_UI_STORAGE.durationSeconds]: settings.durationSeconds,
+          [MOTION_UI_STORAGE.rearTransitionSeconds]: settings.rearTransitionSeconds,
+          [MOTION_UI_STORAGE.settingsRevision]: 2
+        });
+        if (pendingMotionSettings !== settings) return;
+        if (latestState?.hrtf?.motion?.active && !busyHrtf) {
+          renderState(await sendToAudioEngine('update-hrtf-motion', settings));
+        }
+      } catch (error) {
+        showError(`モーション速度の保存: ${error.message}`);
+      } finally {
+        if (pendingMotionSettings === settings) pendingMotionSettings = null;
+      }
+    });
+  }, 180);
+}
+
+motionPattern.addEventListener('change', () => {
   renderMotionDescription();
   rearTransitionControl.hidden = !usesTransitionTiming();
   renderMotionTiming();
-  try {
-    await writeLocalSettings({
-      [MOTION_UI_STORAGE.pattern]: selectedMotionPattern()
-    });
-  } catch (error) {
-    showError(`モーションパターンの保存: ${error.message}`);
-  }
+  scheduleMotionSettingsUpdate();
 });
 
 motionDuration.addEventListener('input', () => {
   renderMotionTiming();
-  clearTimeout(motionDurationSaveTimer);
-  motionDurationSaveTimer = setTimeout(async () => {
-    try {
-      await writeLocalSettings({
-        [MOTION_UI_STORAGE.durationSeconds]: Number(motionDuration.value)
-      });
-    } catch (error) {
-      showError(`モーション速度の保存: ${error.message}`);
-    }
-  }, 180);
+  scheduleMotionSettingsUpdate();
 });
 
 rearTransitionDuration.addEventListener('input', () => {
   renderMotionTiming();
-  clearTimeout(rearTransitionSaveTimer);
-  rearTransitionSaveTimer = setTimeout(async () => {
-    try {
-      await writeLocalSettings({
-        [MOTION_UI_STORAGE.rearTransitionSeconds]: Number(rearTransitionDuration.value)
-      });
-    } catch (error) {
-      showError(`後ろを通る時間の保存: ${error.message}`);
-    }
-  }, 180);
+  scheduleMotionSettingsUpdate();
 });
 
 motionStartButton.addEventListener('click', async () => {
@@ -2213,7 +2233,7 @@ settingsImportButton.addEventListener('click', () => settingsImportFile.click())
 settingsImportFile.addEventListener('change', async () => {
   showSettingsStatus();
   try {
-    await importProductSettings(settingsImportFile.files?.[0]);
+    if (!await importProductSettings(settingsImportFile.files?.[0])) return;
     showSettingsStatus('設定を読み込みました。反映のため再読み込みします。');
     setTimeout(() => chrome.runtime.reload(), 700);
   } catch (error) {
@@ -2260,13 +2280,15 @@ async function initializeApplication() {
   setSectionGroupExpanded(advancedSettingsToggle, advancedProductSections, false, '詳細設定');
   setSectionGroupExpanded(developerLabToggle, developerLabSections, false, '開発者ラボ');
   await initializePromptControls();
-  initializeProductPreferences().catch((error) => {
-    showError(`製品設定の読込: ${error.message}`);
-  });
-  initializeMotionControls().catch((error) => {
-    renderMotionDescription();
-    showError(`モーション設定の読込: ${error.message}`);
-  });
+  await Promise.all([
+    initializeProductPreferences().catch((error) => {
+      showError(`製品設定の読込: ${error.message}`);
+    }),
+    initializeMotionControls().catch((error) => {
+      renderMotionDescription();
+      showError(`モーション設定の読込: ${error.message}`);
+    })
+  ]);
   refresh();
   setInterval(refresh, 1500);
 }

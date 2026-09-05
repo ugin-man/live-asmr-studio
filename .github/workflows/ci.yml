@@ -21,5 +21,8 @@ jobs:
       - run: node scripts/test_localization.js
       - run: node scripts/test_session_prompt_config.js
       - run: node scripts/test_background_capture.js
+      - run: node scripts/test_audio_lifecycle.js
+      - run: node scripts/test_settings.js
+      - run: node scripts/test_motion_controls.js
       - run: node scripts/test_v071_ambience.js
       - run: python scripts/package_extension.py

@@ -177,6 +177,7 @@ let hrtfPositionRequestId = 0;
 let hrtfMotionGeneration = 0;
 let hrtfMotionTimer = null;
 let hrtfMotion = createStoppedHrtfMotion();
+let hrtfMotionEnabled = true;
 let passiveTestGeneration = 0;
 let passiveTestTimer = null;
 let passiveTest = createIdlePassiveTest();
@@ -185,9 +186,36 @@ let processingMode = 'hrtf';
 let outputMuted = false;
 let capturedTabId = null;
 let trackInfo = null;
+let audioLifecycleQueue = Promise.resolve();
+
+function enqueueAudioLifecycle(operation) {
+  const pending = audioLifecycleQueue.catch(() => {}).then(operation);
+  audioLifecycleQueue = pending.catch(() => {});
+  return pending;
+}
+
+// Offscreen documents only expose chrome.runtime, not chrome.storage.
+// Delegate persistence to the service worker, including reads before capture.
+const audioSettings = {
+  async get(keys) {
+    const response = await chrome.runtime.sendMessage({
+      target: 'background', type: 'audio-settings-get', keys
+    });
+    if (!response?.ok) throw new Error(response?.error || 'Could not load audio settings.');
+    return response.values;
+  },
+  async set(values) {
+    const response = await chrome.runtime.sendMessage({
+      target: 'background', type: 'audio-settings-set', values
+    });
+    if (!response?.ok) throw new Error(response?.error || 'Could not save audio settings.');
+  }
+};
 
 function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, Number(value)));
+  const number = Number(value);
+  if (!Number.isFinite(number)) throw new Error('Expected a finite numeric setting.');
+  return Math.max(min, Math.min(max, number));
 }
 
 function normalizeAzimuth(value) {
@@ -1154,20 +1182,26 @@ async function runHrtfMotionTick(generation) {
   }
 }
 
-async function startHrtfMotion(pattern, durationSeconds, rearTransitionSeconds) {
+async function startHrtfMotion(pattern, durationSeconds, rearTransitionSeconds, persistPreference = true) {
+  const motionBaseDistance = hrtfMotion.active
+    ? hrtfMotion.baseDistanceMeters : currentDistanceMeters;
   const normalizedPattern = HRTF_MOTION_PATTERNS.has(pattern) ? pattern : 'behind-sweep';
   const normalizedDuration = clamp(
-    durationSeconds, MIN_HRTF_MOTION_DURATION_SECONDS, MAX_HRTF_MOTION_DURATION_SECONDS);
+    durationSeconds ?? DEFAULT_HRTF_MOTION_DURATION_SECONDS,
+    MIN_HRTF_MOTION_DURATION_SECONDS, MAX_HRTF_MOTION_DURATION_SECONDS);
   const normalizedRearTransition = clamp(
     rearTransitionSeconds ?? DEFAULT_HRTF_REAR_TRANSITION_SECONDS,
     MIN_HRTF_REAR_TRANSITION_SECONDS,
     Math.min(MAX_HRTF_REAR_TRANSITION_SECONDS, normalizedDuration / 2 - 0.4));
-  await stopHrtfMotion(false);
+  const stopping = stopHrtfMotion(false);
+  const generation = hrtfMotionGeneration;
+  await stopping;
   await setMode('hrtf');
+  if (generation !== hrtfMotionGeneration || !audioContext) return state();
 
   const now = performance.now();
   const baseDistance = clamp(
-    currentDistanceMeters, MIN_HRTF_MOTION_DISTANCE_METERS, MAX_HRTF_MOTION_DISTANCE_METERS);
+    motionBaseDistance, MIN_HRTF_MOTION_DISTANCE_METERS, MAX_HRTF_MOTION_DISTANCE_METERS);
   const startPosition = {
     azimuth: currentAzimuth,
     distanceMeters: currentDistanceMeters
@@ -1176,7 +1210,6 @@ async function startHrtfMotion(pattern, durationSeconds, rearTransitionSeconds) 
     ? startPosition
     : periodicHrtfMotionPosition(
       normalizedPattern, 0, baseDistance, normalizedDuration, normalizedRearTransition);
-  const generation = ++hrtfMotionGeneration;
   hrtfMotion = {
     active: true,
     pattern: normalizedPattern,
@@ -1193,11 +1226,16 @@ async function startHrtfMotion(pattern, durationSeconds, rearTransitionSeconds) 
     randomTo: randomHrtfMotionTarget(startPosition, baseDistance),
     lastError: null
   };
+  if (persistPreference) {
+    hrtfMotionEnabled = true;
+    await persistMotionSettings();
+  }
+  if (generation !== hrtfMotionGeneration) return state();
   scheduleHrtfMotionTick(generation, 0);
   return state();
 }
 
-async function stopHrtfMotion(persistPosition = true) {
+async function stopHrtfMotion(persistPosition = true, persistPreference = false) {
   const wasActive = hrtfMotion.active;
   hrtfMotionGeneration += 1;
   hrtfPositionRequestId += 1;
@@ -1205,17 +1243,30 @@ async function stopHrtfMotion(persistPosition = true) {
   hrtfMotionTimer = null;
   hrtfMotion.active = false;
   hrtfMotion.startedAtMs = null;
+  if (persistPreference) {
+    hrtfMotionEnabled = false;
+    // Do not overwrite timing/pattern edits queued by the panel while stopping.
+    await audioSettings.set({ hrtfMotionEnabled: false });
+  }
   if (persistPosition && wasActive) {
     await persistHrtfPosition();
   }
   return state();
 }
 
+async function persistMotionSettings() {
+  await audioSettings.set({
+    hrtfMotionEnabled,
+    hrtfMotionPattern: hrtfMotion.pattern,
+    hrtfMotionDurationSeconds: hrtfMotion.durationSeconds,
+    hrtfRearTransitionSeconds: hrtfMotion.rearTransitionSeconds,
+    hrtfMotionUiRevision: 2
+  });
+}
+
 async function persistHrtfPosition() {
   try {
-    const storageArea = globalThis.chrome?.storage?.local;
-    if (!storageArea) return false;
-    await storageArea.set({
+    await audioSettings.set({
       hrtfAzimuth: currentAzimuth,
       hrtfDistanceMeters: currentDistanceMeters
     });
@@ -1363,7 +1414,7 @@ async function startPassiveTest(options = {}) {
     throw new Error('先にChatGPTタブの音声を取得してください。');
   }
   if (passiveTest.active) await finishPassiveTest('stopped', 'restarted');
-  await startHrtfMotion('behind-sweep', 24, 3);
+  await startHrtfMotion('behind-sweep', 24, 3, false);
   return beginPassiveTestMonitoring({
     ...options,
     ownsMotion: true
@@ -1380,6 +1431,7 @@ async function startCapture(streamId, tabId) {
   await Promise.all([
     loadHrtfSettings(), loadTextureSettings(), loadAmbienceSettings()
   ]);
+  await loadMotionSettings();
 
   try {
 
@@ -1609,24 +1661,30 @@ async function startCapture(streamId, tabId) {
       sampleRate: settings.sampleRate ?? null,
       sampleSize: settings.sampleSize ?? null
     };
+    const capturedStream = stream;
     audioTrack.onended = () => {
-      const endedTabId = capturedTabId;
-      stopCapture()
-        .catch(console.error)
-        .finally(() => chrome.runtime.sendMessage({
+      enqueueAudioLifecycle(async () => {
+        // A queued event from an old track must not stop a newer capture.
+        if (stream !== capturedStream) return;
+        await stopCapture();
+        await chrome.runtime.sendMessage({
           target: 'background',
           type: 'capture-ended',
-          tabId: endedTabId,
+          tabId,
           reason: 'track-ended'
-        }).catch(console.error));
+        });
+      }).catch(console.error);
     };
   }
 
   await audioContext.resume();
   await setMode('hrtf');
-  await startHrtfMotion(
-    'behind-sweep', DEFAULT_HRTF_MOTION_DURATION_SECONDS,
-    DEFAULT_HRTF_REAR_TRANSITION_SECONDS);
+  if (hrtfMotionEnabled) {
+    await startHrtfMotion(
+      hrtfMotion.pattern, hrtfMotion.durationSeconds,
+      hrtfMotion.rearTransitionSeconds, false);
+  }
+  if (audioTrack?.readyState === 'ended') throw new Error('Tab audio ended during startup.');
   return state();
   } catch (error) {
     await stopCapture().catch((cleanupError) => {
@@ -1641,7 +1699,7 @@ async function loadTextureSettings() {
   if (textureSettingsLoadPromise) return textureSettingsLoadPromise;
   textureSettingsLoadPromise = (async () => {
     try {
-    const stored = await chrome.storage.local.get([
+    const stored = await audioSettings.get([
       'texturePresetId', 'textureIntensity', 'textureDensity', 'textureBody',
       'textureNearEar', 'textureSettingsRevision', 'vibrationEnabled',
       'vibrationIntensity', 'deEsserEnabled', 'deEsserIntensity',
@@ -1688,7 +1746,7 @@ async function loadTextureSettings() {
     if (Number.isFinite(Number(stored.earlyReflectionsIntensity))) {
       earlyReflectionsIntensity = clamp(stored.earlyReflectionsIntensity, 0, 1);
     }
-    await chrome.storage.local.set({
+    await audioSettings.set({
       texturePresetId,
       textureDensity,
       textureBody,
@@ -1725,7 +1783,7 @@ async function setTexturePreset(value) {
   textureNearEar = preset.nearEar;
   textureSettingsLoaded = true;
   applyTexture(false);
-  await chrome.storage.local.set({
+  await audioSettings.set({
     texturePresetId,
     textureDensity,
     textureBody,
@@ -1747,7 +1805,7 @@ async function setTextureComponent(component, value) {
   texturePresetId = 'custom';
   textureSettingsLoaded = true;
   applyTexture(false);
-  await chrome.storage.local.set({
+  await audioSettings.set({
     texturePresetId,
     textureDensity,
     textureBody,
@@ -1762,7 +1820,7 @@ async function setVibrationEnabled(value) {
   vibrationEnabled = Boolean(value);
   textureSettingsLoaded = true;
   applyVibration(false);
-  await chrome.storage.local.set({
+  await audioSettings.set({
     vibrationEnabled,
     vibrationIntensity,
     textureSettingsRevision: TEXTURE_SETTINGS_REVISION
@@ -1775,7 +1833,7 @@ async function setVibrationIntensity(value) {
   vibrationIntensity = clamp(value, 0, 1);
   textureSettingsLoaded = true;
   applyVibration(false);
-  await chrome.storage.local.set({
+  await audioSettings.set({
     vibrationEnabled,
     vibrationIntensity,
     textureSettingsRevision: TEXTURE_SETTINGS_REVISION
@@ -1788,7 +1846,7 @@ async function setDeEsserEnabled(value) {
   deEsserEnabled = Boolean(value);
   textureSettingsLoaded = true;
   applyTexture(false);
-  await chrome.storage.local.set({
+  await audioSettings.set({
     deEsserEnabled,
     deEsserIntensity,
     textureSettingsRevision: TEXTURE_SETTINGS_REVISION
@@ -1801,7 +1859,7 @@ async function setDeEsserIntensity(value) {
   deEsserIntensity = clamp(value, 0, 1);
   textureSettingsLoaded = true;
   applyTexture(false);
-  await chrome.storage.local.set({
+  await audioSettings.set({
     deEsserEnabled,
     deEsserIntensity,
     textureSettingsRevision: TEXTURE_SETTINGS_REVISION
@@ -1814,7 +1872,7 @@ async function setEarlyReflectionsEnabled(value) {
   earlyReflectionsEnabled = Boolean(value);
   textureSettingsLoaded = true;
   applyEarlyReflections(false);
-  await chrome.storage.local.set({
+  await audioSettings.set({
     earlyReflectionsEnabled,
     earlyReflectionsIntensity,
     textureSettingsRevision: TEXTURE_SETTINGS_REVISION
@@ -1827,7 +1885,7 @@ async function setEarlyReflectionsIntensity(value) {
   earlyReflectionsIntensity = clamp(value, 0, 1);
   textureSettingsLoaded = true;
   applyEarlyReflections(false);
-  await chrome.storage.local.set({
+  await audioSettings.set({
     earlyReflectionsEnabled,
     earlyReflectionsIntensity,
     textureSettingsRevision: TEXTURE_SETTINGS_REVISION
@@ -1840,10 +1898,9 @@ async function loadAmbienceSettings() {
   if (ambienceSettingsLoadPromise) return ambienceSettingsLoadPromise;
   ambienceSettingsLoadPromise = (async () => {
     try {
-      const storageArea = globalThis.chrome?.storage?.local;
-      const stored = storageArea ? await storageArea.get([
+      const stored = await audioSettings.get([
         'ambienceMode', 'ambienceLevelDb', 'ambienceSettingsRevision'
-      ]) : {};
+      ]);
       const storedRevision = Number(stored.ambienceSettingsRevision ?? 0);
       const storedLevelDb = Number(stored.ambienceLevelDb);
       if (storedRevision < 3 && stored.ambienceMode === 'quiet-room') {
@@ -1874,9 +1931,7 @@ async function loadAmbienceSettings() {
 }
 
 async function persistAmbienceSettings() {
-  const storageArea = globalThis.chrome?.storage?.local;
-  if (!storageArea) return false;
-  await storageArea.set({
+  await audioSettings.set({
     ambienceMode,
     ambienceLevelDb,
     ambienceSettingsRevision: AMBIENCE_SETTINGS_REVISION
@@ -1939,12 +1994,33 @@ function setMuted(value) {
   return state();
 }
 
+async function loadMotionSettings() {
+  const stored = await audioSettings.get([
+    'hrtfMotionEnabled', 'hrtfMotionPattern', 'hrtfMotionDurationSeconds',
+    'hrtfRearTransitionSeconds', 'hrtfMotionUiRevision'
+  ]);
+  hrtfMotionEnabled = stored.hrtfMotionEnabled !== false;
+  if (HRTF_MOTION_PATTERNS.has(stored.hrtfMotionPattern)) {
+    hrtfMotion.pattern = stored.hrtfMotionPattern;
+  }
+  if (Number.isFinite(Number(stored.hrtfMotionDurationSeconds))) {
+    hrtfMotion.durationSeconds = clamp(stored.hrtfMotionDurationSeconds,
+      MIN_HRTF_MOTION_DURATION_SECONDS, MAX_HRTF_MOTION_DURATION_SECONDS);
+  }
+  const transition = Number(stored.hrtfRearTransitionSeconds);
+  if (Number.isFinite(transition)
+      && !(Number(stored.hrtfMotionUiRevision ?? 0) < 2 && Math.abs(transition - 1.8) < 0.001)) {
+    hrtfMotion.rearTransitionSeconds = clamp(transition,
+      MIN_HRTF_REAR_TRANSITION_SECONDS, MAX_HRTF_REAR_TRANSITION_SECONDS);
+  }
+}
+
 async function loadHrtfSettings() {
   if (hrtfSettingsLoaded) return;
   if (hrtfSettingsLoadPromise) return hrtfSettingsLoadPromise;
   hrtfSettingsLoadPromise = (async () => {
     try {
-    const stored = await chrome.storage.local.get([
+    const stored = await audioSettings.get([
       'hrtfOutputGain', 'hrtfAzimuth', 'hrtfDistanceMeters',
       'hrtfDatasetId', 'hrtfSettingsRevision'
     ]);
@@ -1976,7 +2052,7 @@ async function loadHrtfSettings() {
       currentDistanceMeters = clamp(
         storedDistance, MIN_SOURCE_DISTANCE_METERS, HRTF_REFERENCE_DISTANCE_METERS);
     }
-    await chrome.storage.local.set({
+    await audioSettings.set({
       hrtfOutputGain,
       hrtfAzimuth: currentAzimuth,
       hrtfDistanceMeters: currentDistanceMeters,
@@ -2001,7 +2077,7 @@ async function setHrtfOutputGain(value) {
   hrtfOutputGain = clamp(value, MIN_HRTF_OUTPUT_GAIN, MAX_HRTF_OUTPUT_GAIN);
   hrtfSettingsLoaded = true;
   applyHrtfOutputGain(false);
-  await chrome.storage.local.set({
+  await audioSettings.set({
     hrtfOutputGain,
     hrtfSettingsRevision: HRTF_SETTINGS_REVISION
   });
@@ -2055,7 +2131,7 @@ async function setHrtfDataset(value) {
       });
       committedToAudio = true;
     }
-    await chrome.storage.local.set({
+    await audioSettings.set({
       hrtfDatasetId,
       hrtfSettingsRevision: HRTF_SETTINGS_REVISION
     });
@@ -2419,6 +2495,7 @@ async function setHrtfPosition(
     distanceMeters, MIN_SOURCE_DISTANCE_METERS, HRTF_REFERENCE_DISTANCE_METERS);
 
   const dataset = await ensureHrtfDataset();
+  if (requestId !== hrtfPositionRequestId) return state();
   if (!audioContext || !hrtfConvolverA || !hrtfConvolverB) {
     throw new Error('Start tab capture before selecting a binaural position.');
   }
@@ -2518,9 +2595,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   (async () => {
     switch (message.type) {
       case 'start-capture':
-        return { ok: true, state: await startCapture(message.streamId, message.tabId) };
+        return { ok: true, state: await enqueueAudioLifecycle(
+          () => startCapture(message.streamId, message.tabId)) };
       case 'stop-capture':
-        await stopCapture();
+        await enqueueAudioLifecycle(() => stopCapture());
         return { ok: true, state: state() };
       case 'set-pan':
         return { ok: true, state: setPan(message.value) };
@@ -2556,14 +2634,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         return { ok: true, state: previewAmbience() };
       case 'set-hrtf-position':
       case 'set-spatial-position':
-        await stopHrtfMotion(false);
+        await stopHrtfMotion(false, true);
         return { ok: true, state: await setHrtfPosition(
           message.azimuth, message.elevation, message.distanceMeters) };
       case 'start-hrtf-motion':
         return { ok: true, state: await startHrtfMotion(
           message.pattern, message.durationSeconds, message.rearTransitionSeconds) };
+      case 'update-hrtf-motion':
+        // A delayed slider update must never restart a motion the user stopped.
+        return { ok: true, state: hrtfMotion.active ? await startHrtfMotion(
+          message.pattern, message.durationSeconds, message.rearTransitionSeconds) : state() };
       case 'stop-hrtf-motion':
-        return { ok: true, state: await stopHrtfMotion(true) };
+        return { ok: true, state: await stopHrtfMotion(true, true) };
       case 'start-passive-test':
         return { ok: true, state: await startPassiveTest({
           durationSeconds: message.durationSeconds,

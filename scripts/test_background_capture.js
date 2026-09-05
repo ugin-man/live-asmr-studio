@@ -11,6 +11,8 @@ let backgroundMessageListener = null;
 let engineState = { capturing: false, tabId: null, mode: 'hrtf' };
 let streamIdFactory = (tabId) => Promise.resolve(`stream-${tabId}`);
 let streamRequestCount = 0;
+let startBarrier = null;
+let startCount = 0;
 const failedStartTabs = new Set();
 const badges = new Map();
 const badgeHistory = [];
@@ -31,6 +33,8 @@ const chrome = {
         return { ok: true, state: { ...engineState } };
       }
       if (message.type === 'start-capture') {
+        startCount += 1;
+        if (startBarrier) await startBarrier;
         if (failedStartTabs.has(message.tabId)) {
           return { ok: false, error: `start failed for ${message.tabId}` };
         }
@@ -125,6 +129,31 @@ function sendBackground(message) {
   assert.notEqual(badges.get(1), 'ON');
 
   streamIdFactory = (tabId) => Promise.resolve(`stream-${tabId}`);
+  // The panel may be reopened while the same tab is already captured.
+  streamIdFactory = () => Promise.reject(new Error('Cannot capture a tab with an active stream.'));
+  actionClickListener(tabs.get(2));
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.equal(engineState.tabId, 2);
+  assert.equal(badges.get(2), 'ON');
+  assert.equal((await sendBackground({ target: 'background', type: 'get-product-state' })).product.lastError, null);
+
+  // Stop waits for a slow start to clean up, rather than closing its resources
+  // concurrently and returning while audio can still come back on.
+  await sendBackground({ target: 'background', type: 'stop-capture' });
+  streamIdFactory = (tabId) => Promise.resolve(`stream-${tabId}`);
+  let releaseStart;
+  startBarrier = new Promise((resolve) => { releaseStart = resolve; });
+  const startsBefore = startCount;
+  actionClickListener(tabs.get(1));
+  await waitFor(() => startCount > startsBefore, 'slow start entered');
+  const stopPending = sendBackground({ target: 'background', type: 'stop-capture' });
+  releaseStart();
+  assert.equal((await stopPending).state.capturing, false);
+  startBarrier = null;
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(engineState.capturing, false);
+  assert.equal(badges.get(1), '');
+
   failedStartTabs.add(2);
   actionClickListener(tabs.get(2));
   await waitFor(() => badges.get(2) === '!', 'failed restart badge');
@@ -140,7 +169,7 @@ function sendBackground(message) {
   const unsupportedState = await sendBackground({ target: 'background', type: 'get-product-state' });
   assert.match(unsupportedState.product.lastError, /ChatGPT Voice Live/);
 
-  console.log('v0.15.0 capture ownership and badge lifecycle test passed');
+  console.log('v0.15.1 capture ownership and badge lifecycle test passed');
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;

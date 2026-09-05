@@ -182,18 +182,18 @@ assert.match(html, /class="card [^"]*advanced-product-section[^"]*" hidden/);
 assert.match(html, /class="card [^"]*developer-lab-section[^"]*" hidden/);
 assert.match(offscreenJs, /let processingMode = 'hrtf';/);
 assert.match(offscreenJs, /await audioContext\.resume\(\);\s+await setMode\('hrtf'\);/);
-assert.match(offscreenJs, /await startHrtfMotion\(\s*'behind-sweep'/);
+assert.match(offscreenJs, /if \(hrtfMotionEnabled\)\s*\{\s*await startHrtfMotion\(\s*hrtfMotion.pattern/);
 assert.match(offscreenJs, /let currentAzimuth = -ASMR_SIDE_AZIMUTH_DEGREES/);
 assert.match(offscreenJs, /const DEFAULT_SOURCE_DISTANCE_METERS = 0\.1/);
 assert.match(offscreenJs, /function nearFarReturnMotionPosition\(/);
 assert.match(offscreenJs, /'left-pullback', 'right-pullback'/);
 
 const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'manifest.json'), 'utf8'));
-assert.equal(manifest.version, '0.15.0');
+assert.equal(manifest.version, '0.15.1');
 assert.equal(manifest.name, 'Live ASMR Studio');
 assert.equal(manifest.icons['128'], 'assets/icons/icon128.png');
 assert.equal(manifest.host_permissions, undefined);
 assert.doesNotMatch(offscreenJs, /raw\.githubusercontent\.com|ircam-farfield/);
 assert.match(html, /class="card developer-toggle-card" hidden/);
 
-console.log('v0.15.0 onomatopoeia, quick timing and pullback motion test passed');
+console.log('v0.15.1 onomatopoeia, quick timing and pullback motion test passed');
